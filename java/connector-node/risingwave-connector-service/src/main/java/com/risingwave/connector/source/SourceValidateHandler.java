@@ -17,7 +17,6 @@
 package com.risingwave.connector.source;
 
 import com.risingwave.connector.api.TableSchema;
-import com.risingwave.connector.api.source.SourceTypeE;
 import com.risingwave.connector.source.common.CdcSourceFactory;
 import com.risingwave.proto.ConnectorServiceProto;
 import io.grpc.StatusRuntimeException;
@@ -65,9 +64,6 @@ public class SourceValidateHandler {
 
     public static void validateSource(ConnectorServiceProto.ValidateSourceRequest request)
             throws Exception {
-        var props = request.getPropertiesMap();
-        var sourceType = SourceTypeE.valueOf(request.getSourceType());
-
         boolean isCdcSourceJob = request.getIsSourceJob();
         boolean isBackfillTable = request.getIsBackfillTable();
         LOG.info(
@@ -77,8 +73,16 @@ public class SourceValidateHandler {
                 isBackfillTable);
 
         TableSchema tableSchema = TableSchema.fromProto(request.getTableSchema());
-        CdcSourceFactory.createSource(
-                        sourceType, request.getSourceId(), null, props, false, isCdcSourceJob)
-                .validate(tableSchema, isBackfillTable);
+        // Validation has no offset and no snapshot state, so the config is built as for a fresh
+        // start of the source.
+        var source =
+                CdcSourceFactory.createSource(
+                        ConnectorServiceProto.GetEventStreamRequest.newBuilder()
+                                .setSourceId(request.getSourceId())
+                                .setSourceType(request.getSourceType())
+                                .putAllProperties(request.getPropertiesMap())
+                                .setIsSourceJob(isCdcSourceJob)
+                                .build());
+        source.getConfig().validateSource(tableSchema, isBackfillTable);
     }
 }

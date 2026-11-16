@@ -16,7 +16,9 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.cdc.debezium.internal.ConfigurableOffsetBackingStore;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import java.util.Properties;
 
 public class PostgresDbzConnectorConfig extends DbzConnectorConfig {
@@ -27,16 +29,54 @@ public class PostgresDbzConnectorConfig extends DbzConnectorConfig {
     public static final String IS_AWS_RDS = "postgres.is.aws.rds";
     public static final String TEST_ONLY_FORCE_RDS = "test.only.force.rds";
 
-    PostgresDbzConnectorConfig(CdcSource source) {
-        super(source);
+    private static final String AWS_RDS_HOST = "amazonaws.com";
+
+    PostgresDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
+    }
+
+    public String getJdbcUrl() {
+        return String.format("jdbc:postgresql://%s:%s/%s", getHost(), getPort(), getDbName());
+    }
+
+    public String getPubName() {
+        return userProps.get(PUB_NAME);
+    }
+
+    public String getSlotName() {
+        return userProps.get(SLOT_NAME);
+    }
+
+    public boolean isPubAutoCreate() {
+        return Boolean.parseBoolean(userProps.getOrDefault(PUB_CREATE, "true"));
+    }
+
+    /**
+     * Whether the upstream database is AWS RDS, from (in priority order) the explicit {@code
+     * postgres.is.aws.rds} option, the hostname, or the test-only {@code test.only.force.rds}.
+     */
+    public boolean isAwsRds() {
+        return Boolean.parseBoolean(userProps.getOrDefault(IS_AWS_RDS, "false"))
+                || getHost().contains(AWS_RDS_HOST)
+                || Boolean.parseBoolean(userProps.getOrDefault(TEST_ONLY_FORCE_RDS, "false"));
+    }
+
+    @Override
+    public void validateSource(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
+        ensureRequiredProps();
+        ensurePropNotBlank(SCHEMA_NAME);
+        ensurePropNotBlank(SLOT_NAME);
+        ensurePropNotBlank(PUB_NAME);
+        ensurePropNotBlank(PUB_CREATE);
+        try (var validator = new PostgresValidator(this, tableSchema)) {
+            validator.validateAll();
+        }
     }
 
     @Override
     protected void customizeDebeziumProperties(Properties dbzProps) {
         var postgresProps = loadPropertiesTemplate("postgres.properties");
-
-        var pubAutoCreate = Boolean.parseBoolean(userProps.getOrDefault(PUB_CREATE, "true"));
-        if (!pubAutoCreate) {
+        if (!isPubAutoCreate()) {
             postgresProps.setProperty("publication.autocreate.mode", "disabled");
         }
         if (isBackfillSource) {
@@ -53,7 +93,6 @@ public class PostgresDbzConnectorConfig extends DbzConnectorConfig {
             postgresProps.setProperty(
                     ConfigurableOffsetBackingStore.OFFSET_STATE_VALUE, startOffset);
         }
-
         // adapt value of sslmode to the expected value
         var sslMode = postgresProps.getProperty("database.sslmode");
         if (sslMode != null) {
@@ -70,9 +109,7 @@ public class PostgresDbzConnectorConfig extends DbzConnectorConfig {
             }
             postgresProps.setProperty("database.sslmode", sslMode);
         }
-
         dbzProps.putAll(postgresProps);
-
         if (userProps.containsKey(SSL_ROOT_CERT)) {
             dbzProps.setProperty("database.sslrootcert", userProps.get(SSL_ROOT_CERT));
         }

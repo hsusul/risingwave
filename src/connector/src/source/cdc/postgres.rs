@@ -39,7 +39,7 @@ impl CdcSourceDdlValidator for Postgres {
     fn check_and_fill_create_with_options(
         props: &mut BTreeMap<String, String>,
     ) -> ConnectorResult<()> {
-        check_common_with_options(props)?;
+        check_common_with_options::<Self>(props)?;
         match props.get("slot.name") {
             None => {
                 // Build a random slot name with UUID
@@ -88,7 +88,7 @@ impl CdcSourceDdlValidator for Postgres {
         props: &BTreeMap<String, String>,
         secret_refs: &BTreeMap<String, PbSecretRef>,
     ) -> ConnectorResult<()> {
-        check_common_with_options(props)?;
+        check_common_with_options::<Self>(props)?;
         check_alter_with_options_inner(
             Self::CDC_CONNECTOR_NAME,
             props,

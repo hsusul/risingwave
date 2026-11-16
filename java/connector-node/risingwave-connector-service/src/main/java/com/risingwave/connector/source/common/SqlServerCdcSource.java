@@ -16,24 +16,12 @@
 
 package com.risingwave.connector.source.common;
 
-import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
-import javax.management.MalformedObjectNameException;
-import javax.management.ObjectName;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public class SqlServerCdcSource extends CdcSource {
-    SqlServerCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
-    }
-
-    public static String getJdbcUrl(String host, String port, String database) {
-        return String.format("jdbc:sqlserver://%s:%s;databaseName=%s", host, port, database);
+    SqlServerCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
     @Override
@@ -42,24 +30,7 @@ public class SqlServerCdcSource extends CdcSource {
     }
 
     @Override
-    public void validate(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
-        var userProps = getUserProps();
-        CdcSourceValidator.validateHeartbeatInterval(userProps);
-        CdcSourceValidator.validateHeartbeatTableAutoInitialize(userProps, getSourceType());
-        CdcSourceValidator.validateQueueMemoryRatio(userProps);
-        CdcSourceValidator.ensureRequiredProps(userProps, isCdcSourceJob());
-        CdcSourceValidator.ensurePropNotBlank(userProps, DbzConnectorConfig.SCHEMA_NAME);
-        try (var validator = new SqlServerValidator(userProps, tableSchema, isCdcSourceJob())) {
-            validator.validateAll();
-        }
-    }
-
-    @Override
-    protected ObjectName getStreamingMetricsObjectName(String dbServerName)
-            throws MalformedObjectNameException {
-        // TODO: fulfill the task id here, by WKX
-        return new ObjectName(
-                "debezium.sql_server:type=connector-metrics,task=0,context=streaming,server="
-                        + dbServerName);
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new SqlServerDbzConnectorConfig(request);
     }
 }

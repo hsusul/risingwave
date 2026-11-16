@@ -27,6 +27,7 @@ pub mod sql_server;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 
+use anyhow::anyhow;
 pub use enumerator::*;
 use itertools::Itertools;
 use risingwave_common::bail;
@@ -102,6 +103,10 @@ pub trait CdcSourceRuntimeFlags: CdcSourceTypeTrait {
     /// when Debezium consumes the option for the connector and RisingWave can apply the resulting
     /// DDL events.
     const CAN_AUTO_SCHEMA_CHANGE: bool = false;
+    /// When true, the connector accepts `heartbeat.table.auto.initialize = true`, which makes
+    /// source validation create the heartbeat table named by `heartbeat.table.name` in the
+    /// upstream database if it does not exist yet.
+    const CAN_AUTO_INITIALIZE_HEARTBEAT_TABLE: bool = false;
     /// When true, the source executor waits for a non-empty split offset before reporting the
     /// initial CDC offset.
     const NEEDS_NON_EMPTY_INITIAL_OFFSET: bool = false;
@@ -148,8 +153,11 @@ pub trait CdcSourceDdlValidator: CdcSourceTypeTrait {
     /// first.
     fn check_and_fill_create_with_options(
         props: &mut BTreeMap<String, String>,
-    ) -> ConnectorResult<()> {
-        check_common_with_options(props)
+    ) -> ConnectorResult<()>
+    where
+        Self: CdcSourceRuntimeFlags,
+    {
+        check_common_with_options::<Self>(props)
     }
 
     /// Checks that the license allows the CDC source.
@@ -162,8 +170,11 @@ pub trait CdcSourceDdlValidator: CdcSourceTypeTrait {
     fn check_alter_with_options(
         props: &BTreeMap<String, String>,
         _secret_refs: &BTreeMap<String, PbSecretRef>,
-    ) -> ConnectorResult<()> {
-        check_common_with_options(props)
+    ) -> ConnectorResult<()>
+    where
+        Self: CdcSourceRuntimeFlags,
+    {
+        check_common_with_options::<Self>(props)
     }
 }
 
@@ -238,8 +249,13 @@ pub fn split_quoted_identifier_inner(name: &str, open: char, close: char) -> Opt
     Some(parts)
 }
 
+const HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY: &str = "heartbeat.table.auto.initialize";
+
 /// Checks the `WITH (...)` options that every CDC source accepts, on both `CREATE` and `ALTER`.
-pub fn check_common_with_options(props: &BTreeMap<String, String>) -> ConnectorResult<()> {
+/// Options that only some connectors support are checked against the runtime flags of `T`.
+pub fn check_common_with_options<T: CdcSourceRuntimeFlags>(
+    props: &BTreeMap<String, String>,
+) -> ConnectorResult<()> {
     // RisingWave consumes schema-less JSON from Debezium and cannot reconstruct the scale of
     // binary logical decimals emitted by `precise`. `double` can lose precision, so an explicit
     // override must retain the common `string` default from `debezium.properties`.
@@ -258,12 +274,22 @@ pub fn check_common_with_options(props: &BTreeMap<String, String>) -> ConnectorR
             bail!("Invalid value `{value}` for `{key}`");
         }
     }
-    // Keep this policy in sync with Java's `SourceValidateHandler.validateHeartbeatInterval`:
-    // match Java's ASCII integer syntax and Debezium's signed 32-bit range.
+    // Debezium reads the interval as a signed 32-bit integer.
     if let Some(value) = props.get("debezium.heartbeat.interval.ms")
         && !value.parse::<i32>().is_ok_and(|interval| interval > 0)
     {
         bail!("'debezium.heartbeat.interval.ms' must be a positive integer, got: '{value}'");
+    }
+    if let Some(value) = props.get(HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY)
+        && value.parse::<bool>().map_err(|_| {
+            anyhow!("'{HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY}' must be 'true' or 'false'")
+        })?
+        && !T::CAN_AUTO_INITIALIZE_HEARTBEAT_TABLE
+    {
+        bail!(
+            "'{HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY}=true' is not supported for connector {}",
+            T::CDC_CONNECTOR_NAME
+        );
     }
     Ok(())
 }

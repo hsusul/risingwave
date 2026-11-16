@@ -21,6 +21,7 @@ import com.risingwave.connector.cdc.debezium.internal.DebeziumOffsetSerializer;
 import com.risingwave.connector.source.common.CdcConnectorException;
 import com.risingwave.connector.source.common.CdcEventType;
 import com.risingwave.connector.source.common.CdcSource;
+import com.risingwave.connector.source.common.DbzConnectorConfig;
 import com.risingwave.proto.ConnectorServiceProto.CdcMessage;
 import com.risingwave.proto.ConnectorServiceProto.GetEventStreamResponse;
 import io.debezium.connector.postgresql.PostgresOffsetContext;
@@ -50,6 +51,7 @@ public class DbzChangeEventConsumer
     private final BlockingQueue<GetEventStreamResponse> outputChannel;
 
     private final CdcSource source;
+    private final boolean needsOffsetCommitOnCheckpoint;
     private final long sourceId;
     private final JsonConverter payloadConverter;
     private final JsonConverter keyConverter;
@@ -62,13 +64,14 @@ public class DbzChangeEventConsumer
 
     DbzChangeEventConsumer(
             CdcSource source,
+            DbzConnectorConfig config,
             String heartbeatTopicPrefix,
             String transactionTopic,
             String schemaChangeTopic,
-            boolean isBackfillSource,
             BlockingQueue<GetEventStreamResponse> queue) {
         this.source = source;
-        this.sourceId = source.getSourceId();
+        this.needsOffsetCommitOnCheckpoint = config.needsOffsetCommitOnCheckpoint();
+        this.sourceId = config.getSourceId();
         this.outputChannel = queue;
         this.heartbeatTopicPrefix = heartbeatTopicPrefix;
         this.transactionTopic = transactionTopic;
@@ -84,7 +87,8 @@ public class DbzChangeEventConsumer
         configs.put(ConverterConfig.TYPE_CONFIG, ConverterType.VALUE.getName());
         // include record schema to output JSON in { "schema": { ... }, "payload": { ... } } format
         configs.put(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, true);
-        configs.put(JsonConverterConfig.REPLACE_NULL_WITH_DEFAULT_CONFIG, !isBackfillSource);
+        configs.put(
+                JsonConverterConfig.REPLACE_NULL_WITH_DEFAULT_CONFIG, !config.isBackfillSource());
         payloadConverter.configure(configs);
         this.payloadConverter = payloadConverter;
 
@@ -269,7 +273,7 @@ public class DbzChangeEventConsumer
                 default:
                     break;
             }
-            if (!source.needsOffsetCommitOnCheckpoint()) {
+            if (!needsOffsetCommitOnCheckpoint) {
                 committer.markProcessed(event);
             }
         }
@@ -281,7 +285,7 @@ public class DbzChangeEventConsumer
             var response = respBuilder.build();
             outputChannel.put(response);
         }
-        if (!source.needsOffsetCommitOnCheckpoint()) {
+        if (!needsOffsetCommitOnCheckpoint) {
             committer.markBatchFinished();
         }
     }

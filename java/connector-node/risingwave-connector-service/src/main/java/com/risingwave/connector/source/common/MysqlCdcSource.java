@@ -16,18 +16,12 @@
 
 package com.risingwave.connector.source.common;
 
-import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public class MysqlCdcSource extends CdcSource {
-    MysqlCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+    MysqlCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
     @Override
@@ -36,21 +30,7 @@ public class MysqlCdcSource extends CdcSource {
     }
 
     @Override
-    public void validate(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
-        var userProps = getUserProps();
-        CdcSourceValidator.validateHeartbeatInterval(userProps);
-        CdcSourceValidator.validateHeartbeatTableAutoInitialize(userProps, getSourceType());
-        CdcSourceValidator.validateQueueMemoryRatio(userProps);
-        CdcSourceValidator.ensureRequiredProps(userProps, isCdcSourceJob());
-        CdcSourceValidator.ensurePropNotBlank(userProps, MysqlDbzConnectorConfig.SERVER_ID);
-        try (var validator =
-                new MySqlValidator(
-                        getSourceType(),
-                        userProps,
-                        tableSchema,
-                        isCdcSourceJob(),
-                        isBackfillTable)) {
-            validator.validateAll();
-        }
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new MysqlDbzConnectorConfig(request);
     }
 }

@@ -16,14 +16,81 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.cdc.debezium.internal.ConfigurableOffsetBackingStore;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
+import io.debezium.config.CommonConnectorConfig;
+import java.lang.management.ManagementFactory;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import javax.management.JMException;
+import javax.management.ObjectName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class SqlServerDbzConnectorConfig extends DbzConnectorConfig {
+    private static final Logger LOG = LoggerFactory.getLogger(SqlServerDbzConnectorConfig.class);
+
     public static final String ENCRYPT = "database.encrypt";
 
-    SqlServerDbzConnectorConfig(CdcSource source) {
-        super(source);
+    SqlServerDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
+    }
+
+    public String getJdbcUrl() {
+        var encrypt = Boolean.parseBoolean(userProps.getOrDefault(ENCRYPT, "false"));
+        return String.format(
+                "jdbc:sqlserver://%s:%s;databaseName=%s;encrypt=%s;trustServerCertificate=true",
+                getHost(), getPort(), getDbName(), encrypt);
+    }
+
+    @Override
+    public void validateSource(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
+        ensureRequiredProps();
+        ensurePropNotBlank(SCHEMA_NAME);
+        try (var validator = new SqlServerValidator(this, tableSchema)) {
+            validator.validateAll();
+        }
+    }
+
+    /** Same as the default, but the SQL Server connector registers its metrics per task. */
+    @Override
+    public boolean waitForStreamingRunning(BooleanSupplier shouldContinue)
+            throws InterruptedException {
+        var dbServerName =
+                getResolvedDebeziumProps().getProperty(CommonConnectorConfig.TOPIC_PREFIX.name());
+        LOG.info("Waiting for streaming source of {} to start", dbServerName);
+        var mbeanServer = ManagementFactory.getPlatformMBeanServer();
+        int pollCount = 0;
+        while (true) {
+            if (!shouldContinue.getAsBoolean()) {
+                LOG.info("Cancelled waiting for streaming source of {} to start", dbServerName);
+                return false;
+            }
+            try {
+                // TODO: fulfill the task id here, by WKX
+                var metricsName =
+                        new ObjectName(
+                                "debezium.sql_server:type=connector-metrics,task=0,context=streaming,server="
+                                        + dbServerName);
+                if ((boolean) mbeanServer.getAttribute(metricsName, "Connected")) {
+                    LOG.info("Debezium streaming source of {} started", dbServerName);
+                    return true;
+                }
+            } catch (JMException _ex) {
+                // expected while the streaming source is not ready
+            }
+            if (pollCount > waitStreamingStartTimeout) {
+                LOG.error(
+                        "Debezium streaming source of {} failed to start in timeout {}",
+                        dbServerName,
+                        waitStreamingStartTimeout);
+                return false;
+            }
+            TimeUnit.SECONDS.sleep(1);
+            pollCount++;
+        }
     }
 
     @Override

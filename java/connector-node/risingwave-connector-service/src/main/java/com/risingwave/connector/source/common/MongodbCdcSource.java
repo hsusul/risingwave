@@ -16,18 +16,12 @@
 
 package com.risingwave.connector.source.common;
 
-import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public class MongodbCdcSource extends CdcSource {
-    MongodbCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+    MongodbCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
     @Override
@@ -36,15 +30,7 @@ public class MongodbCdcSource extends CdcSource {
     }
 
     @Override
-    public void validate(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
-        var userProps = getUserProps();
-        CdcSourceValidator.validateHeartbeatInterval(userProps);
-        CdcSourceValidator.validateHeartbeatTableAutoInitialize(userProps, getSourceType());
-        CdcSourceValidator.validateQueueMemoryRatio(userProps);
-        CdcSourceValidator.ensurePropNotBlank(userProps, MongodbDbzConnectorConfig.MONGO_URL);
-        CdcSourceValidator.ensurePropNotBlank(userProps, MongodbDbzConnectorConfig.COLLECTION_NAME);
-        try (var validator = new MongoDbValidator(userProps, CdcSourceFactory.createConfig(this))) {
-            validator.validateAll();
-        }
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new MongodbDbzConnectorConfig(request);
     }
 }

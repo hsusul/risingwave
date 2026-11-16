@@ -45,7 +45,7 @@ impl CdcSourceDdlValidator for Mariadb {
         props: &BTreeMap<String, String>,
         secret_refs: &BTreeMap<String, PbSecretRef>,
     ) -> ConnectorResult<()> {
-        check_common_with_options(props)?;
+        check_common_with_options::<Self>(props)?;
         check_alter_with_options_inner(
             Self::CDC_CONNECTOR_NAME,
             props,

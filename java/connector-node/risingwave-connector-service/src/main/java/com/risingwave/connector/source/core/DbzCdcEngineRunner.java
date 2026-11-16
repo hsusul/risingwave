@@ -20,7 +20,6 @@ import com.risingwave.connector.source.common.CdcSource;
 import com.risingwave.connector.source.common.DbzConnectorConfig;
 import com.risingwave.java.binding.CdcSourceChannel;
 import com.risingwave.proto.ConnectorServiceProto.GetEventStreamResponse;
-import io.debezium.config.CommonConnectorConfig;
 import io.grpc.stub.StreamObserver;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,7 +35,6 @@ public class DbzCdcEngineRunner {
     private final ExecutorService executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private DbzCdcEngine engine;
-    private final CdcSource source;
     private final DbzConnectorConfig config;
 
     public static DbzCdcEngineRunner newCdcEngineRunner(
@@ -45,7 +43,7 @@ public class DbzCdcEngineRunner {
             StreamObserver<GetEventStreamResponse> responseObserver) {
         DbzCdcEngineRunner runner = null;
         try {
-            var sourceId = source.getSourceId();
+            var sourceId = config.getSourceId();
             var engine =
                     new DbzCdcEngine(
                             source,
@@ -66,7 +64,7 @@ public class DbzCdcEngineRunner {
                                 }
                             });
 
-            runner = new DbzCdcEngineRunner(source, config);
+            runner = new DbzCdcEngineRunner(config);
             runner.withEngine(engine);
         } catch (Exception e) {
             LOG.error("failed to create the CDC engine", e);
@@ -79,8 +77,8 @@ public class DbzCdcEngineRunner {
      */
     public static DbzCdcEngineRunner create(
             CdcSource source, DbzConnectorConfig config, CdcSourceChannel channel) {
-        var runner = new DbzCdcEngineRunner(source, config);
-        var sourceId = source.getSourceId();
+        var runner = new DbzCdcEngineRunner(config);
+        var sourceId = config.getSourceId();
         var engine =
                 new DbzCdcEngine(
                         source,
@@ -118,11 +116,10 @@ public class DbzCdcEngineRunner {
     }
 
     // private constructor
-    private DbzCdcEngineRunner(CdcSource source, DbzConnectorConfig config) {
+    private DbzCdcEngineRunner(DbzConnectorConfig config) {
         this.executor =
                 Executors.newSingleThreadExecutor(
-                        r -> new Thread(r, "rw-dbz-engine-runner-" + source.getSourceId()));
-        this.source = source;
+                        r -> new Thread(r, "rw-dbz-engine-runner-" + config.getSourceId()));
         this.config = config;
     }
 
@@ -130,8 +127,8 @@ public class DbzCdcEngineRunner {
         this.engine = engine;
     }
 
-    DbzCdcEngineRunner(CdcSource source, DbzConnectorConfig config, DbzCdcEngine engine) {
-        this(source, config);
+    DbzCdcEngineRunner(DbzConnectorConfig config, DbzCdcEngine engine) {
+        this(config);
         this.engine = engine;
     }
 
@@ -152,14 +149,9 @@ public class DbzCdcEngineRunner {
 
         boolean startOk = true;
         // For backfill source, we need to wait for the streaming source to start before proceeding
-        if (source.isBackfillSource()) {
-            var databaseServerName =
-                    config.getResolvedDebeziumProps()
-                            .getProperty(CommonConnectorConfig.TOPIC_PREFIX.name());
+        if (config.isBackfillSource()) {
             startOk =
-                    source.waitForStreamingRunning(
-                            databaseServerName,
-                            source.getWaitStreamingStartTimeout(),
+                    config.waitForStreamingRunning(
                             () -> isRunning() && shouldContinue.getAsBoolean());
         }
 

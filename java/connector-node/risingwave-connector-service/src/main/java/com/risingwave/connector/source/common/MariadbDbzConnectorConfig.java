@@ -16,13 +16,13 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import io.debezium.connector.mariadb.MariaDbStreamingChangeEventSource;
-import java.util.Map;
 import java.util.Properties;
 
 public class MariadbDbzConnectorConfig extends MysqlDbzConnectorConfig {
-    MariadbDbzConnectorConfig(CdcSource source) {
-        super(source);
+    MariadbDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
     }
 
     public static String normalizeSslMode(String sslMode) {
@@ -37,13 +37,15 @@ public class MariadbDbzConnectorConfig extends MysqlDbzConnectorConfig {
         };
     }
 
-    public static String sslMode(Map<String, String> userProps) {
+    @Override
+    public String getSslMode() {
         return normalizeSslMode(
                 userProps.getOrDefault(
                         SSL_MODE, userProps.getOrDefault("debezium.database.sslmode", "disabled")));
     }
 
-    public static String sslRootCert(Map<String, String> userProps) {
+    @Override
+    public String getSslRootCert() {
         return userProps.getOrDefault(
                 "ssl.root.cert", userProps.get("debezium.database.sslrootcert"));
     }
@@ -56,8 +58,8 @@ public class MariadbDbzConnectorConfig extends MysqlDbzConnectorConfig {
     @Override
     protected void customizeDebeziumProperties(Properties dbzProps) {
         super.customizeDebeziumProperties(dbzProps);
-        dbzProps.setProperty("database.ssl.mode", sslMode(userProps));
-        var rootCert = sslRootCert(userProps);
+        dbzProps.setProperty("database.ssl.mode", getSslMode());
+        var rootCert = getSslRootCert();
         if (rootCert != null) {
             dbzProps.setProperty("driver.serverSslCert", rootCert);
             dbzProps.setProperty(MariaDbStreamingChangeEventSource.SSL_ROOT_CERT_CONFIG, rootCert);

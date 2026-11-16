@@ -16,6 +16,8 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.connector.api.TableSchema;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import io.debezium.heartbeat.DatabaseHeartbeatImpl;
 import java.util.Properties;
 
@@ -25,14 +27,39 @@ public class OracleDbzConnectorConfig extends DbzConnectorConfig {
     public static final String HEARTBEAT_ACTION_QUERY_KEY =
             DBZ_PROPERTY_PREFIX + DatabaseHeartbeatImpl.HEARTBEAT_ACTION_QUERY_PROPERTY_NAME;
 
-    OracleDbzConnectorConfig(CdcSource source) {
-        super(source);
+    OracleDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
+    }
+
+    public String getPdbName() {
+        return userProps.get(PDB_NAME);
+    }
+
+    public String getHeartbeatTableName() {
+        return userProps.get(HEARTBEAT_TABLE_NAME);
+    }
+
+    @Override
+    public void validateSource(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
+        ensureRequiredProps();
+        ensurePropNotBlank(PDB_NAME);
+        ensurePropNotBlank(SCHEMA_NAME);
+        ensurePropNotBlank(HEARTBEAT_TABLE_NAME);
+        if (userProps.containsKey(HEARTBEAT_ACTION_QUERY_KEY)) {
+            throw ValidatorUtils.invalidArgument(
+                    String.format(
+                            "'%s' is generated internally; configure '%s' instead",
+                            HEARTBEAT_ACTION_QUERY_KEY, HEARTBEAT_TABLE_NAME));
+        }
+        try (var validator = new OracleValidator(this, tableSchema)) {
+            validator.validateAll();
+        }
     }
 
     @Override
     protected void customizeDebeziumProperties(Properties dbzProps) {
         var oracleProps = loadPropertiesTemplate("oracle.properties");
-        var heartbeatTable = OracleHeartbeatTable.parse(userProps.get(HEARTBEAT_TABLE_NAME));
+        var heartbeatTable = OracleHeartbeatTable.parse(getHeartbeatTableName());
         oracleProps.setProperty(
                 DatabaseHeartbeatImpl.HEARTBEAT_ACTION_QUERY_PROPERTY_NAME,
                 heartbeatTable.actionQuery());

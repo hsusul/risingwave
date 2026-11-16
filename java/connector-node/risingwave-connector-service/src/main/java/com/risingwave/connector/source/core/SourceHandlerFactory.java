@@ -17,25 +17,16 @@
 package com.risingwave.connector.source.core;
 
 import com.risingwave.connector.api.source.SourceHandler;
-import com.risingwave.connector.api.source.SourceTypeE;
 import com.risingwave.connector.source.common.CdcSourceFactory;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public abstract class SourceHandlerFactory {
     static final Logger LOG = LoggerFactory.getLogger(SourceHandlerFactory.class);
 
-    public static SourceHandler createSourceHandler(
-            SourceTypeE source,
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        var cdcSource =
-                CdcSourceFactory.createSource(
-                        source, sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
-        return new DbzSourceHandler(cdcSource, CdcSourceFactory.createConfig(cdcSource));
+    public static SourceHandler createSourceHandler(GetEventStreamRequest request) {
+        var source = CdcSourceFactory.createSource(request);
+        return new DbzSourceHandler(source, source.getConfig());
     }
 }

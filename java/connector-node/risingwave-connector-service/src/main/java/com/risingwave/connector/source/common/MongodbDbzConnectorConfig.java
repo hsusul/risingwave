@@ -17,7 +17,9 @@
 package com.risingwave.connector.source.common;
 
 import com.mongodb.ConnectionString;
+import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.cdc.debezium.internal.ConfigurableOffsetBackingStore;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import io.debezium.connector.mongodb.MongoDbConnectorConfig;
 import java.util.LinkedHashSet;
 import java.util.Optional;
@@ -45,8 +47,21 @@ public class MongodbDbzConnectorConfig extends DbzConnectorConfig {
                     DBZ_PROPERTY_PREFIX + MongoDbConnectorConfig.DATABASE_EXCLUDE_LIST.name(),
                     DBZ_PROPERTY_PREFIX + MongoDbConnectorConfig.FILTERS_MATCH_MODE.name());
 
-    MongodbDbzConnectorConfig(CdcSource source) {
-        super(source);
+    MongodbDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
+    }
+
+    public String getMongoUrl() {
+        return userProps.get(MONGO_URL);
+    }
+
+    @Override
+    public void validateSource(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
+        ensurePropNotBlank(MONGO_URL);
+        ensurePropNotBlank(COLLECTION_NAME);
+        try (var validator = new MongoDbValidator(this)) {
+            validator.validateAll();
+        }
     }
 
     @Override
@@ -61,7 +76,6 @@ public class MongodbDbzConnectorConfig extends DbzConnectorConfig {
                     ConfigurableOffsetBackingStore.OFFSET_STATE_VALUE, startOffset);
         }
 
-        var mongodbUrl = userProps.get(MONGO_URL);
         var collection = userProps.get(COLLECTION_NAME);
         var hasRawFilterOverride =
                 RAW_FILTER_OPTIONS_DISABLING_INFERENCE.stream().anyMatch(userProps::containsKey);
@@ -84,7 +98,7 @@ public class MongodbDbzConnectorConfig extends DbzConnectorConfig {
                             });
         }
 
-        var connectionStr = new ConnectionString(mongodbUrl);
+        var connectionStr = new ConnectionString(getMongoUrl());
         var connectorName =
                 String.format("MongoDB_%d:%s:%s", sourceId, connectionStr.getHosts(), collection);
         mongodbProps.setProperty("name", connectorName);

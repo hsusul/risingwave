@@ -16,13 +16,14 @@
 
 package com.risingwave.connector.source.core;
 
-import com.risingwave.connector.api.source.SourceTypeE;
 import com.risingwave.connector.cdc.debezium.internal.DebeziumOffset;
 import com.risingwave.connector.cdc.debezium.internal.DebeziumOffsetSerializer;
 import com.risingwave.connector.source.common.CdcConnectorException;
 import com.risingwave.connector.source.common.CdcSource;
 import com.risingwave.connector.source.common.CdcSourceFactory;
 import com.risingwave.connector.source.common.DbzConnectorConfig;
+import com.risingwave.connector.source.common.PostgresCdcSource;
+import com.risingwave.connector.source.common.PostgresDbzConnectorConfig;
 import com.risingwave.java.binding.CdcSourceChannel;
 import com.risingwave.metrics.ConnectorNodeMetrics;
 import com.risingwave.proto.ConnectorServiceProto;
@@ -37,19 +38,19 @@ import org.slf4j.LoggerFactory;
 public class JniDbzSourceHandler {
     static final Logger LOG = LoggerFactory.getLogger(JniDbzSourceHandler.class);
 
-    private final CdcSource source;
+    private final DbzConnectorConfig config;
     private final DbzCdcEngineRunner runner;
     private final CdcSourceChannel channel;
 
     public JniDbzSourceHandler(
             CdcSource source, DbzConnectorConfig config, CdcSourceChannel channel) {
-        this.source = source;
+        this.config = config;
         this.runner = DbzCdcEngineRunner.create(source, config, channel);
         this.channel = channel;
     }
 
     public long getSourceId() {
-        return source.getSourceId();
+        return config.getSourceId();
     }
 
     public static void runJniDbzSourceThread(byte[] getEventStreamRequestBytes, long channelPtr)
@@ -60,16 +61,11 @@ public class JniDbzSourceHandler {
             var request =
                     ConnectorServiceProto.GetEventStreamRequest.parseFrom(
                             getEventStreamRequestBytes);
-            var source =
-                    CdcSourceFactory.createSource(
-                            SourceTypeE.valueOf(request.getSourceType()),
-                            request.getSourceId(),
-                            request.getStartOffset(),
-                            request.getPropertiesMap(),
-                            request.getSnapshotDone(),
-                            request.getIsSourceJob());
-            source.prepareUpstream();
-            var config = CdcSourceFactory.createConfig(source);
+            var source = CdcSourceFactory.createSource(request);
+            var config = source.getConfig();
+            if (config instanceof PostgresDbzConnectorConfig postgresConfig) {
+                PostgresCdcSource.createPublication(postgresConfig);
+            }
             JniDbzSourceHandler handler = new JniDbzSourceHandler(source, config, channel);
             handler.start();
         } catch (Throwable t) {
@@ -88,7 +84,7 @@ public class JniDbzSourceHandler {
     public void commitOffset(String encodedOffset) throws InterruptedException {
         try {
             if (encodedOffset.isEmpty()) {
-                LOG.debug("Engine#{}: commit offset is empty", source.getSourceId());
+                LOG.debug("Engine#{}: commit offset is empty", config.getSourceId());
                 return;
             }
             DebeziumOffset offset =
@@ -97,12 +93,12 @@ public class JniDbzSourceHandler {
             var changeEventConsumer = runner.getChangeEventConsumer();
             if (changeEventConsumer != null) {
                 changeEventConsumer.commitOffset(offset);
-                LOG.info("Engine#{}: committed offset {}", source.getSourceId(), offset);
+                LOG.info("Engine#{}: committed offset {}", config.getSourceId(), offset);
             } else {
-                LOG.warn("Engine#{}: changeEventConsumer is null", source.getSourceId());
+                LOG.warn("Engine#{}: changeEventConsumer is null", config.getSourceId());
             }
         } catch (IOException err) {
-            LOG.error("Engine#{}: fail to commit offset.", source.getSourceId(), err);
+            LOG.error("Engine#{}: fail to commit offset.", config.getSourceId(), err);
             throw new CdcConnectorException(err.getMessage());
         }
     }
@@ -118,14 +114,14 @@ public class JniDbzSourceHandler {
             if (!sendHandshakeMessage(channel, startOk)) {
                 LOG.error(
                         "Failed to send handshake message to channel. sourceId={}",
-                        source.getSourceId());
+                        config.getSourceId());
                 return;
             }
             if (!startOk) {
                 return;
             }
 
-            LOG.info("Start consuming events of table {}", source.getSourceId());
+            LOG.info("Start consuming events of table {}", config.getSourceId());
             while (runner.isRunning()) {
                 // check whether the send queue has room for new messages
                 // Thread will block on the channel to get output from engine
@@ -133,12 +129,12 @@ public class JniDbzSourceHandler {
                 boolean success;
                 if (resp != null) {
                     ConnectorNodeMetrics.incSourceRowsReceived(
-                            source.getSourceType().toString(),
-                            String.valueOf(source.getSourceId()),
+                            config.getSourceType().toString(),
+                            String.valueOf(config.getSourceId()),
                             resp.getEventsCount());
                     LOG.debug(
                             "Engine#{}: emit one chunk {} events to network ",
-                            source.getSourceId(),
+                            config.getSourceId(),
                             resp.getEventsCount());
                     success = channel.send(resp.toByteArray());
                 } else {
@@ -150,7 +146,7 @@ public class JniDbzSourceHandler {
                 if (!success) {
                     LOG.info(
                             "Engine#{}: JNI receiver closed, stop the engine",
-                            source.getSourceId());
+                            config.getSourceId());
                     return;
                 }
             }
@@ -165,7 +161,7 @@ public class JniDbzSourceHandler {
             try {
                 runner.stop();
             } catch (Exception e) {
-                LOG.warn("Failed to stop Engine#{}", source.getSourceId(), e);
+                LOG.warn("Failed to stop Engine#{}", config.getSourceId(), e);
             } finally {
                 // remove the handler from registry
                 JniDbzSourceRegistry.unregister(this);
@@ -182,7 +178,7 @@ public class JniDbzSourceHandler {
 
         var handshakeMsg =
                 GetEventStreamResponse.newBuilder()
-                        .setSourceId(source.getSourceId())
+                        .setSourceId(config.getSourceId())
                         .setControl(controlInfo)
                         .build();
         return channel.send(handshakeMsg.toByteArray());

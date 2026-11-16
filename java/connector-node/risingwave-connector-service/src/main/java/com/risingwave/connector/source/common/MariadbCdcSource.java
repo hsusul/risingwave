@@ -17,20 +17,20 @@
 package com.risingwave.connector.source.common;
 
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public class MariadbCdcSource extends MysqlCdcSource {
-    MariadbCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+    MariadbCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
     @Override
     public SourceTypeE getSourceType() {
         return SourceTypeE.MARIADB;
+    }
+
+    @Override
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new MariadbDbzConnectorConfig(request);
     }
 }

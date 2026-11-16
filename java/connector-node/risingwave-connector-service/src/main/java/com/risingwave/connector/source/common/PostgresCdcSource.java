@@ -16,11 +16,10 @@
 
 package com.risingwave.connector.source.common;
 
-import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.api.source.SourceTypeE;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.Map;
 import java.util.Optional;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -29,41 +28,37 @@ import org.slf4j.LoggerFactory;
 public class PostgresCdcSource extends CdcSource {
     private static final Logger LOG = LoggerFactory.getLogger(PostgresCdcSource.class);
 
-    PostgresCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+    PostgresCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
-    public static String getJdbcUrl(String host, String port, String database) {
-        return String.format("jdbc:postgresql://%s:%s/%s", host, port, database);
+    @Override
+    public SourceTypeE getSourceType() {
+        return SourceTypeE.POSTGRES;
+    }
+
+    @Override
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new PostgresDbzConnectorConfig(request);
     }
 
     /**
-     * Creates the publication named in the properties if it does not exist, unless the properties
-     * disable automatic creation.
+     * Creates the publication named in the WITH options if it does not exist, unless the options
+     * disable automatic creation. Validation of a shared source and the reader, before the Debezium
+     * engine starts, both call it.
      */
-    public static void createPublication(Map<String, String> properties) throws SQLException {
-        boolean pubAutoCreate =
-                properties.get(PostgresDbzConnectorConfig.PUB_CREATE).equalsIgnoreCase("true");
-        var pubName = properties.get(PostgresDbzConnectorConfig.PUB_NAME);
-        if (!pubAutoCreate) {
+    public static void createPublication(PostgresDbzConnectorConfig config) throws SQLException {
+        var pubName = config.getPubName();
+        if (!config.isPubAutoCreate()) {
             LOG.info(
                     "Postgres publication auto creation is disabled, skip creation for publication {}.",
                     pubName);
             return;
         }
 
-        var dbHost = properties.get(DbzConnectorConfig.HOST);
-        var dbPort = properties.get(DbzConnectorConfig.PORT);
-        var dbName = properties.get(DbzConnectorConfig.DB_NAME);
-        var jdbcUrl = getJdbcUrl(dbHost, dbPort, dbName);
-        var user = properties.get(DbzConnectorConfig.USER);
-        var password = properties.get(DbzConnectorConfig.PASSWORD);
-        try (var jdbcConnection = DriverManager.getConnection(jdbcUrl, user, password)) {
+        try (var jdbcConnection =
+                DriverManager.getConnection(
+                        config.getJdbcUrl(), config.getUser(), config.getPassword())) {
             boolean isPubExist = false;
             try (var stmt =
                     jdbcConnection.prepareStatement(
@@ -76,8 +71,8 @@ public class PostgresCdcSource extends CdcSource {
             }
 
             if (!isPubExist) {
-                var schemaName = properties.get(DbzConnectorConfig.SCHEMA_NAME);
-                var tableName = properties.get(DbzConnectorConfig.TABLE_NAME);
+                var schemaName = config.getSchemaName();
+                var tableName = config.getTableName();
                 Optional<String> schemaTableName;
                 if (StringUtils.isBlank(schemaName) || StringUtils.isBlank(tableName)) {
                     schemaTableName = Optional.empty();
@@ -122,32 +117,6 @@ public class PostgresCdcSource extends CdcSource {
                 }
             }
         }
-    }
-
-    @Override
-    public SourceTypeE getSourceType() {
-        return SourceTypeE.POSTGRES;
-    }
-
-    @Override
-    public void validate(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
-        var userProps = getUserProps();
-        CdcSourceValidator.validateHeartbeatInterval(userProps);
-        CdcSourceValidator.validateHeartbeatTableAutoInitialize(userProps, getSourceType());
-        CdcSourceValidator.validateQueueMemoryRatio(userProps);
-        CdcSourceValidator.ensureRequiredProps(userProps, isCdcSourceJob());
-        CdcSourceValidator.ensurePropNotBlank(userProps, DbzConnectorConfig.SCHEMA_NAME);
-        CdcSourceValidator.ensurePropNotBlank(userProps, PostgresDbzConnectorConfig.SLOT_NAME);
-        CdcSourceValidator.ensurePropNotBlank(userProps, PostgresDbzConnectorConfig.PUB_NAME);
-        CdcSourceValidator.ensurePropNotBlank(userProps, PostgresDbzConnectorConfig.PUB_CREATE);
-        try (var validator = new PostgresValidator(userProps, tableSchema, isCdcSourceJob())) {
-            validator.validateAll();
-        }
-    }
-
-    @Override
-    public void prepareUpstream() throws SQLException {
-        createPublication(getUserProps());
     }
 
     private static String quoteIdentifier(String identifier) {

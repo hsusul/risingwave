@@ -16,9 +16,11 @@
 
 package com.risingwave.connector.source;
 
-import com.risingwave.connector.api.source.SourceTypeE;
 import com.risingwave.connector.source.common.CdcSourceFactory;
 import com.risingwave.connector.source.common.MongoDbValidator;
+import com.risingwave.connector.source.common.MongodbDbzConnectorConfig;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
+import com.risingwave.proto.ConnectorServiceProto.SourceType;
 import java.util.HashMap;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -32,10 +34,15 @@ public class MongoDbValidatorTest {
         userProps.put("mongodb.url", "mongodb://rwcdc:123456@localhost:27017/?authSource=admin");
         userProps.put("collection.name", "test.users");
         var config =
-                CdcSourceFactory.createConfig(
+                (MongodbDbzConnectorConfig)
                         CdcSourceFactory.createSource(
-                                SourceTypeE.MONGODB, 1, null, userProps, false, false));
-        MongoDbValidator validator = new MongoDbValidator(userProps, config);
+                                        GetEventStreamRequest.newBuilder()
+                                                .setSourceId(1)
+                                                .setSourceType(SourceType.MONGODB)
+                                                .putAllProperties(userProps)
+                                                .build())
+                                .getConfig();
+        MongoDbValidator validator = new MongoDbValidator(config);
         validator.validateAll();
     }
 }

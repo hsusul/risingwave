@@ -21,10 +21,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import com.risingwave.connector.api.source.SourceTypeE;
 import com.risingwave.connector.source.common.CdcSource;
 import com.risingwave.connector.source.common.CdcSourceFactory;
 import com.risingwave.connector.source.common.DbzConnectorConfig;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
+import com.risingwave.proto.ConnectorServiceProto.SourceType;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -36,30 +37,31 @@ import org.junit.Test;
 public class DbzCdcEngineRunnerTest {
     private static CdcSource source() {
         return CdcSourceFactory.createSource(
-                SourceTypeE.POSTGRES,
-                27413,
-                null,
-                Map.of(
-                        "hostname", "localhost",
-                        "port", "5432",
-                        "database.name", "test",
-                        "schema.name", "public",
-                        "table.name", "test",
-                        "slot.name", "startup_test",
-                        "username", "postgres",
-                        "password", "postgres",
-                        "debezium.snapshot.mode", "rw_cdc_backfill",
-                        "cdc.source.wait.streaming.start.timeout", "3600"),
-                true,
-                false);
+                GetEventStreamRequest.newBuilder()
+                        .setSourceId(27413)
+                        .setSourceType(SourceType.POSTGRES)
+                        .putAllProperties(
+                                Map.of(
+                                        "hostname", "localhost",
+                                        "port", "5432",
+                                        "database.name", "test",
+                                        "schema.name", "public",
+                                        "table.name", "test",
+                                        "slot.name", "startup_test",
+                                        "username", "postgres",
+                                        "password", "postgres",
+                                        "debezium.snapshot.mode", "rw_cdc_backfill",
+                                        "cdc.source.wait.streaming.start.timeout", "3600"))
+                        .setSnapshotDone(true)
+                        .build());
     }
 
     @Test(timeout = 10000)
     public void receiverClosureDuringStartupAllowsEngineCleanup() throws Exception {
         var source = source();
-        var config = CdcSourceFactory.createConfig(source);
+        var config = source.getConfig();
         var engine = new WaitingEngine(source, config);
-        var runner = new DbzCdcEngineRunner(source, config, engine);
+        var runner = new DbzCdcEngineRunner(config, engine);
         var receiverOpen = new AtomicBoolean(true);
         var polling = new CountDownLatch(1);
         try (var executor = Executors.newSingleThreadExecutor()) {
@@ -98,9 +100,9 @@ public class DbzCdcEngineRunnerTest {
     @Test(timeout = 10000)
     public void stopDuringStartupDoesNotRestoreRunningState() throws Exception {
         var source = source();
-        var config = CdcSourceFactory.createConfig(source);
+        var config = source.getConfig();
         var engine = new WaitingEngine(source, config);
-        var runner = new DbzCdcEngineRunner(source, config, engine);
+        var runner = new DbzCdcEngineRunner(config, engine);
         try (var executor = Executors.newSingleThreadExecutor()) {
             var startup = executor.submit(() -> runner.start());
             try {
@@ -120,10 +122,10 @@ public class DbzCdcEngineRunnerTest {
     @Test(timeout = 10000)
     public void stopFailureStillInterruptsEngineThread() throws Exception {
         var source = source();
-        var config = CdcSourceFactory.createConfig(source);
+        var config = source.getConfig();
         var engine = new WaitingEngine(source, config);
         engine.failStop = true;
-        var runner = new DbzCdcEngineRunner(source, config, engine);
+        var runner = new DbzCdcEngineRunner(config, engine);
         try {
             assertFalse(runner.start(() -> false));
             assertTrue(engine.started.await(5, TimeUnit.SECONDS));

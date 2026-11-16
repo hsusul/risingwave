@@ -16,16 +16,37 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.cdc.debezium.internal.ConfigurableOffsetBackingStore;
 import com.risingwave.connector.cdc.debezium.internal.OpendalSchemaHistory;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 import java.util.Properties;
 
 public class MysqlDbzConnectorConfig extends DbzConnectorConfig {
     public static final String SERVER_ID = "server.id";
     public static final String SSL_MODE = "ssl.mode";
 
-    MysqlDbzConnectorConfig(CdcSource source) {
-        super(source);
+    MysqlDbzConnectorConfig(GetEventStreamRequest request) {
+        super(request);
+    }
+
+    /** The SSL mode the JDBC driver uses when the validator connects to the upstream database. */
+    public String getSslMode() {
+        return userProps.getOrDefault(SSL_MODE, "DISABLED");
+    }
+
+    /** The server certificate the JDBC driver trusts, or null to use the system trust store. */
+    public String getSslRootCert() {
+        return null;
+    }
+
+    @Override
+    public void validateSource(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
+        ensureRequiredProps();
+        ensurePropNotBlank(SERVER_ID);
+        try (var validator = new MySqlValidator(this, tableSchema, isBackfillTable)) {
+            validator.validateAll();
+        }
     }
 
     protected String getPropertiesTemplate() {
@@ -35,11 +56,9 @@ public class MysqlDbzConnectorConfig extends DbzConnectorConfig {
     @Override
     protected void customizeDebeziumProperties(Properties dbzProps) {
         var mysqlProps = loadPropertiesTemplate(getPropertiesTemplate());
-
         // Enable schema history for all MySQL CDC modes to handle schema changes properly
         mysqlProps.setProperty(OpendalSchemaHistory.SOURCE_ID, String.valueOf(sourceId));
         mysqlProps.setProperty(OpendalSchemaHistory.MAX_RECORDS_PER_FILE_CONFIG, "2048");
-
         if (isBackfillSource) {
             mysqlProps.setProperty("snapshot.locking.mode", "none");
             // If cdc backfill enabled, the source only emit incremental changes, so we must
@@ -60,7 +79,6 @@ public class MysqlDbzConnectorConfig extends DbzConnectorConfig {
             mysqlProps.setProperty("snapshot.mode", "custom");
             mysqlProps.setProperty(ConfigurableOffsetBackingStore.OFFSET_STATE_VALUE, startOffset);
         }
-
         dbzProps.putAll(mysqlProps);
     }
 }

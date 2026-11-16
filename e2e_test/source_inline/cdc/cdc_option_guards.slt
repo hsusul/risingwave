@@ -1,6 +1,7 @@
 # `transactional` and `cdc.source.needs.offset.commit.on.checkpoint` are set by RisingWave itself,
-# and `auto.schema.change` is accepted only by the connectors that can apply the resulting DDL
-# events. All checks run before the upstream database is contacted.
+# `auto.schema.change` is accepted only by the connectors that can apply the resulting DDL
+# events, and `heartbeat.table.auto.initialize` only by the connectors that can create the
+# heartbeat table. All checks run before the upstream database is contacted.
 
 statement error 'transactional' cannot be set
 create source mysql_transactional with (
@@ -47,6 +48,18 @@ create table mongodb_auto_schema_change (_id jsonb primary key, payload jsonb) w
   collection.name = 'mydb.orders',
   auto.schema.change = 'true'
 ) format debezium_mongo encode json;
+
+statement error 'heartbeat.table.auto.initialize=true' is not supported for connector mysql-cdc
+create source mysql_heartbeat_auto_initialize with (
+  connector = 'mysql-cdc',
+  heartbeat.table.auto.initialize = 'true'
+) format plain encode json;
+
+statement error 'heartbeat.table.auto.initialize' must be 'true' or 'false'
+create source postgres_heartbeat_auto_initialize with (
+  connector = 'postgres-cdc',
+  heartbeat.table.auto.initialize = 'yes'
+) format plain encode json;
 
 # A SECRET value is filled into the connector properties only at runtime, after these checks.
 

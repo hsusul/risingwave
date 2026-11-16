@@ -24,7 +24,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 public class OracleValidator extends CdcSourceValidator implements AutoCloseable {
@@ -55,37 +54,25 @@ public class OracleValidator extends CdcSourceValidator implements AutoCloseable
     private final boolean autoInitializeHeartbeatTable;
     private final boolean isCdcSourceJob;
 
-    public OracleValidator(
-            Map<String, String> userProps, TableSchema tableSchema, boolean isCdcSourceJob)
+    public OracleValidator(OracleDbzConnectorConfig config, TableSchema tableSchema)
             throws SQLException {
         this.tableSchema = tableSchema;
         this.pdbName =
                 normalizeIdentifierInConfigOption(
-                        OracleDbzConnectorConfig.PDB_NAME,
-                        userProps.get(OracleDbzConnectorConfig.PDB_NAME));
-        this.heartbeatTable =
-                OracleHeartbeatTable.parse(
-                        userProps.get(OracleDbzConnectorConfig.HEARTBEAT_TABLE_NAME));
-        this.autoInitializeHeartbeatTable =
-                "true"
-                        .equals(
-                                userProps.get(
-                                        DbzConnectorConfig.HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY));
+                        OracleDbzConnectorConfig.PDB_NAME, config.getPdbName());
+        this.heartbeatTable = OracleHeartbeatTable.parse(config.getHeartbeatTableName());
+        this.autoInitializeHeartbeatTable = config.isAutoInitializeHeartbeatTable();
         var jdbcUrl =
                 OracleCdcSource.getJdbcUrl(
-                        userProps.get(DbzConnectorConfig.HOST),
-                        userProps.get(DbzConnectorConfig.PORT),
+                        config.getHost(),
+                        config.getPort(),
                         normalizeIdentifierInConfigOption(
-                                DbzConnectorConfig.DB_NAME,
-                                userProps.get(DbzConnectorConfig.DB_NAME)));
+                                DbzConnectorConfig.DB_NAME, config.getDbName()));
         this.jdbcConnection =
-                DriverManager.getConnection(
-                        jdbcUrl,
-                        userProps.get(DbzConnectorConfig.USER),
-                        userProps.get(DbzConnectorConfig.PASSWORD));
-        this.schemaName = userProps.get(DbzConnectorConfig.SCHEMA_NAME);
-        this.tableName = userProps.get(DbzConnectorConfig.TABLE_NAME);
-        this.isCdcSourceJob = isCdcSourceJob;
+                DriverManager.getConnection(jdbcUrl, config.getUser(), config.getPassword());
+        this.schemaName = config.getSchemaName();
+        this.tableName = config.getTableName();
+        this.isCdcSourceJob = config.isCdcSourceJob();
     }
 
     @Override

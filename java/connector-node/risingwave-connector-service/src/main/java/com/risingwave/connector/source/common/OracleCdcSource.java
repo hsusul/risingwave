@@ -16,18 +16,12 @@
 
 package com.risingwave.connector.source.common;
 
-import com.risingwave.connector.api.TableSchema;
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public class OracleCdcSource extends CdcSource {
-    OracleCdcSource(
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
-        super(sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+    OracleCdcSource(GetEventStreamRequest request) {
+        super(request);
     }
 
     public static String getJdbcUrl(String host, String port, String database) {
@@ -40,25 +34,7 @@ public class OracleCdcSource extends CdcSource {
     }
 
     @Override
-    public void validate(TableSchema tableSchema, boolean isBackfillTable) throws Exception {
-        var userProps = getUserProps();
-        CdcSourceValidator.validateHeartbeatInterval(userProps);
-        CdcSourceValidator.validateHeartbeatTableAutoInitialize(userProps, getSourceType());
-        CdcSourceValidator.validateQueueMemoryRatio(userProps);
-        CdcSourceValidator.ensureRequiredProps(userProps, isCdcSourceJob());
-        CdcSourceValidator.ensurePropNotBlank(userProps, OracleDbzConnectorConfig.PDB_NAME);
-        CdcSourceValidator.ensurePropNotBlank(userProps, DbzConnectorConfig.SCHEMA_NAME);
-        CdcSourceValidator.ensurePropNotBlank(
-                userProps, OracleDbzConnectorConfig.HEARTBEAT_TABLE_NAME);
-        if (userProps.containsKey(OracleDbzConnectorConfig.HEARTBEAT_ACTION_QUERY_KEY)) {
-            throw ValidatorUtils.invalidArgument(
-                    String.format(
-                            "'%s' is generated internally; configure '%s' instead",
-                            OracleDbzConnectorConfig.HEARTBEAT_ACTION_QUERY_KEY,
-                            OracleDbzConnectorConfig.HEARTBEAT_TABLE_NAME));
-        }
-        try (var validator = new OracleValidator(userProps, tableSchema, isCdcSourceJob())) {
-            validator.validateAll();
-        }
+    protected DbzConnectorConfig createConfig(GetEventStreamRequest request) {
+        return new OracleDbzConnectorConfig(request);
     }
 }

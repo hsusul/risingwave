@@ -57,7 +57,7 @@ public class DbzSourceHandler implements SourceHandler {
                     if (Context.current().isCancelled()) {
                         LOG.info(
                                 "Engine#{}: Connection broken detected, stop the engine",
-                                source.getSourceId());
+                                config.getSourceId());
                         runner.stop();
                         return;
                     }
@@ -70,12 +70,12 @@ public class DbzSourceHandler implements SourceHandler {
                                         .poll(500, TimeUnit.MILLISECONDS);
                         if (resp != null) {
                             ConnectorNodeMetrics.incSourceRowsReceived(
-                                    source.getSourceType().toString(),
-                                    String.valueOf(source.getSourceId()),
+                                    config.getSourceType().toString(),
+                                    String.valueOf(config.getSourceId()),
                                     resp.getEventsCount());
                             LOG.debug(
                                     "Engine#{}: emit one chunk {} events to network ",
-                                    source.getSourceId(),
+                                    config.getSourceId(),
                                     resp.getEventsCount());
                             responseObserver.onNext(resp);
                         }
@@ -100,7 +100,7 @@ public class DbzSourceHandler implements SourceHandler {
         try {
             // Start the engine
             runner.start();
-            LOG.info("Start consuming events of table {}", source.getSourceId());
+            LOG.info("Start consuming events of table {}", config.getSourceId());
 
             final OnReadyHandler onReadyHandler = new OnReadyHandler(runner, responseObserver);
 
@@ -114,7 +114,7 @@ public class DbzSourceHandler implements SourceHandler {
             try {
                 runner.stop();
             } catch (Exception e) {
-                LOG.warn("Failed to stop Engine#{}", source.getSourceId(), e);
+                LOG.warn("Failed to stop Engine#{}", config.getSourceId(), e);
             }
         }
     }

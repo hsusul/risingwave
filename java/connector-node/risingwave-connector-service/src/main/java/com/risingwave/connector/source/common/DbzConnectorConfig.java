@@ -16,20 +16,32 @@
 
 package com.risingwave.connector.source.common;
 
+import com.risingwave.connector.api.TableSchema;
+import com.risingwave.connector.api.source.SourceTypeE;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
+import io.debezium.config.CommonConnectorConfig;
 import java.io.IOException;
 import java.io.StringReader;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import javax.management.JMException;
+import javax.management.ObjectName;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.text.StringSubstitutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The Debezium configuration of one {@link CdcSource}, resolved from the common {@code
- * debezium.properties}, the connector's own template, and the WITH options of the source.
+ * The configuration of one {@link CdcSource}: everything the connector node derives from the
+ * reader's request, including the WITH options of the source and the Debezium properties resolved
+ * from the common {@code debezium.properties}, the connector's own template, and those options.
  */
 public abstract class DbzConnectorConfig {
     private static final Logger LOG = LoggerFactory.getLogger(DbzConnectorConfig.class);
@@ -56,34 +68,50 @@ public abstract class DbzConnectorConfig {
     public static final String HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY =
             "heartbeat.table.auto.initialize";
 
+    private static final String WAIT_FOR_STREAMING_START_TIMEOUT_SECS =
+            "cdc.source.wait.streaming.start.timeout";
+    private static final String SNAPSHOT_MODE_KEY = "debezium.snapshot.mode";
+    private static final String SNAPSHOT_MODE_BACKFILL = "rw_cdc_backfill";
+    private static final String NEEDS_OFFSET_COMMIT_ON_CHECKPOINT_KEY =
+            "cdc.source.needs.offset.commit.on.checkpoint";
+
+    protected final SourceTypeE sourceType;
     protected final long sourceId;
     protected final String startOffset;
     protected final Map<String, String> userProps;
     protected final boolean snapshotDone;
     protected final boolean isCdcSourceJob;
     protected final boolean isBackfillSource;
+    protected final int waitStreamingStartTimeout;
+    private final boolean needsOffsetCommitOnCheckpoint;
     private final StringSubstitutor substitutor;
     private final Properties resolvedDbzProps;
 
-    protected DbzConnectorConfig(CdcSource source) {
-        this.sourceId = source.getSourceId();
-        this.startOffset = source.getStartOffset();
-        this.userProps = source.getUserProps();
-        this.snapshotDone = source.isSnapshotDone();
-        this.isCdcSourceJob = source.isCdcSourceJob();
-        this.isBackfillSource = source.isBackfillSource();
+    protected DbzConnectorConfig(GetEventStreamRequest request) {
+        this.sourceType = SourceTypeE.valueOf(request.getSourceType());
+        this.sourceId = request.getSourceId();
+        this.startOffset = request.getStartOffset();
+        this.userProps = request.getPropertiesMap();
+        this.snapshotDone = request.getSnapshotDone();
+        this.isCdcSourceJob = request.getIsSourceJob();
+        this.isBackfillSource = SNAPSHOT_MODE_BACKFILL.equals(userProps.get(SNAPSHOT_MODE_KEY));
+        this.waitStreamingStartTimeout =
+                Integer.parseInt(
+                        userProps.getOrDefault(WAIT_FOR_STREAMING_START_TIMEOUT_SECS, "60"));
+        this.needsOffsetCommitOnCheckpoint =
+                Boolean.parseBoolean(userProps.get(NEEDS_OFFSET_COMMIT_ON_CHECKPOINT_KEY));
         LOG.info(
                 "Building the Debezium config: source={}, sourceId={}, startOffset={},"
                         + " snapshotDone={}, isCdcBackfill={}, isCdcSourceJob={},"
                         + " waitStreamingStartTimeout={}, needsOffsetCommitOnCheckpoint={}",
-                source.getSourceType(),
+                sourceType,
                 sourceId,
                 startOffset,
                 snapshotDone,
                 isBackfillSource,
                 isCdcSourceJob,
-                source.getWaitStreamingStartTimeout(),
-                source.needsOffsetCommitOnCheckpoint());
+                waitStreamingStartTimeout,
+                needsOffsetCommitOnCheckpoint);
 
         var substitutionProps = new HashMap<>(userProps);
         substitutionProps.put("source.id", Long.toString(sourceId));
@@ -92,7 +120,7 @@ public abstract class DbzConnectorConfig {
         var dbzProps = loadPropertiesTemplate(DBZ_CONFIG_FILE);
         customizeDebeziumProperties(dbzProps);
         if (isCdcSourceJob) {
-            LOG.info("Disable table filtering for the shared {} source", source.getSourceType());
+            LOG.info("Disable table filtering for the shared {} source", sourceType);
             dbzProps.remove("table.include.list");
         }
         var otherProps = extractDebeziumProperties(userProps);
@@ -115,8 +143,119 @@ public abstract class DbzConnectorConfig {
         this.resolvedDbzProps = dbzProps;
     }
 
+    public SourceTypeE getSourceType() {
+        return sourceType;
+    }
+
+    public long getSourceId() {
+        return sourceId;
+    }
+
+    public boolean isCdcSourceJob() {
+        return isCdcSourceJob;
+    }
+
+    public boolean isBackfillSource() {
+        return isBackfillSource;
+    }
+
+    /**
+     * Whether Debezium may acknowledge a record only after RisingWave has checkpointed it. This is
+     * needed when the acknowledged offset is committed back to the upstream database, where it lets
+     * the database discard the change log before the offset.
+     */
+    public boolean needsOffsetCommitOnCheckpoint() {
+        return needsOffsetCommitOnCheckpoint;
+    }
+
     public Properties getResolvedDebeziumProps() {
         return resolvedDbzProps;
+    }
+
+    public String getHost() {
+        return userProps.get(HOST);
+    }
+
+    public String getPort() {
+        return userProps.get(PORT);
+    }
+
+    public String getUser() {
+        return userProps.get(USER);
+    }
+
+    public String getPassword() {
+        return userProps.get(PASSWORD);
+    }
+
+    public String getDbName() {
+        return userProps.get(DB_NAME);
+    }
+
+    public String getSchemaName() {
+        return userProps.get(SCHEMA_NAME);
+    }
+
+    public String getTableName() {
+        return userProps.get(TABLE_NAME);
+    }
+
+    public boolean isAutoInitializeHeartbeatTable() {
+        return "true".equals(userProps.get(HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY));
+    }
+
+    /**
+     * Checks the WITH options the connector requires and then the upstream database, as {@code
+     * CREATE SOURCE} and {@code CREATE TABLE} do before accepting the statement. It connects to the
+     * upstream database, so it runs only when called; building the config does not run it.
+     */
+    public abstract void validateSource(TableSchema tableSchema, boolean isBackfillTable)
+            throws Exception;
+
+    /**
+     * Waits until Debezium reports the streaming source as connected. Returns false when the wait
+     * is cancelled by {@code shouldContinue} or times out after the configured number of seconds.
+     */
+    public boolean waitForStreamingRunning(BooleanSupplier shouldContinue)
+            throws InterruptedException {
+        var dbServerName = resolvedDbzProps.getProperty(CommonConnectorConfig.TOPIC_PREFIX.name());
+        LOG.info("Waiting for streaming source of {} to start", dbServerName);
+        var mbeanServer = ManagementFactory.getPlatformMBeanServer();
+        int pollCount = 0;
+        while (true) {
+            // Check cancellation before readiness: a replacement engine can register metrics
+            // under the same server name while the previous reader is being dropped.
+            if (!shouldContinue.getAsBoolean()) {
+                LOG.info("Cancelled waiting for streaming source of {} to start", dbServerName);
+                return false;
+            }
+            // Copy from debezium test suite: io.debezium.embedded.AbstractConnectorTest. The jmx
+            // bean metric is marked as true before starting the binlog client, which may still
+            // fail to connect the upstream database.
+            try {
+                var metricsName =
+                        new ObjectName(
+                                "debezium."
+                                        + sourceType.name().toLowerCase(Locale.ROOT)
+                                        + ":type=connector-metrics,context=streaming,server="
+                                        + dbServerName);
+                if ((boolean) mbeanServer.getAttribute(metricsName, "Connected")) {
+                    LOG.info("Debezium streaming source of {} started", dbServerName);
+                    return true;
+                }
+            } catch (JMException _ex) {
+                // expected while the streaming source (aka. binlog client) is not ready
+            }
+            if (pollCount > waitStreamingStartTimeout) {
+                LOG.error(
+                        "Debezium streaming source of {} failed to start in timeout {}",
+                        dbServerName,
+                        waitStreamingStartTimeout);
+                return false;
+            }
+            TimeUnit.SECONDS.sleep(1); // poll interval; interruption cancels startup
+            pollCount++;
+        }
     }
 
     /**
@@ -130,6 +269,33 @@ public abstract class DbzConnectorConfig {
 
     protected boolean hasStartOffset() {
         return startOffset != null && !startOffset.isBlank();
+    }
+
+    protected void ensureRequiredProps() {
+        ensurePropNotBlank(HOST);
+        ensurePropNotBlank(PORT);
+        ensurePropNotBlank(DB_NAME);
+        ensurePropNotBlank(USER);
+        ensurePropExists(PASSWORD);
+        // ensure table name is passed by user in non-sharing mode
+        if (!isCdcSourceJob) {
+            ensurePropNotBlank(TABLE_NAME);
+        }
+    }
+
+    protected void ensurePropNotBlank(String name) {
+        ensurePropExists(name);
+        if (StringUtils.isBlank(userProps.get(name))) {
+            throw ValidatorUtils.invalidArgument(
+                    String.format("'%s' cannot be empty. Please check the WITH properties", name));
+        }
+    }
+
+    protected void ensurePropExists(String name) {
+        if (!userProps.containsKey(name)) {
+            throw ValidatorUtils.invalidArgument(
+                    String.format("'%s' is not found. Please check the WITH properties", name));
+        }
     }
 
     /**
@@ -171,7 +337,7 @@ public abstract class DbzConnectorConfig {
      * whatever is configured in debezium.properties (max.queue.size = 8192 by default).
      *
      * <p>If user specifies a valid ratio (0.01-0.8), calculate and set max.queue.size.in.bytes
-     * accordingly.
+     * accordingly. An invalid ratio is rejected here, which fails validation with the message.
      *
      * <p>JVM heap size is obtained from Runtime.getRuntime().maxMemory(), which reflects the -Xmx
      * value set by Rust code during JVM initialization. See: src/jni_core/src/jvm_runtime.rs:85-103
@@ -194,9 +360,24 @@ public abstract class DbzConnectorConfig {
             return;
         }
 
-        // Validation is already done in SourceValidateHandler during CREATE/ALTER SOURCE
-        // At this point, ratioStr is guaranteed to be valid (0.01-0.8)
-        double queueMemoryRatio = Double.parseDouble(ratioStr);
+        double queueMemoryRatio;
+        try {
+            queueMemoryRatio = Double.parseDouble(ratioStr);
+        } catch (NumberFormatException e) {
+            throw ValidatorUtils.invalidArgument(
+                    String.format(
+                            "'debezium.queue.memory.ratio' must be a valid number, got: '%s'",
+                            ratioStr));
+        }
+        if (queueMemoryRatio < MIN_QUEUE_MAX_MEMORY_RATIO
+                || queueMemoryRatio > MAX_QUEUE_MAX_MEMORY_RATIO) {
+            throw ValidatorUtils.invalidArgument(
+                    String.format(
+                            "'debezium.queue.memory.ratio' must be between %s and %s, got: %s",
+                            MIN_QUEUE_MAX_MEMORY_RATIO,
+                            MAX_QUEUE_MAX_MEMORY_RATIO,
+                            queueMemoryRatio));
+        }
 
         // Get JVM max heap size from Runtime
         // This reflects the -Xmx value set by Rust during JVM initialization

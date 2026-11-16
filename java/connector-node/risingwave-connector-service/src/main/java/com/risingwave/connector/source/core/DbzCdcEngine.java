@@ -46,14 +46,14 @@ public class DbzCdcEngine implements Runnable {
         var consumer =
                 new DbzChangeEventConsumer(
                         source,
+                        config,
                         heartbeatTopicPrefix,
                         transactionTopic,
                         topicPrefix,
-                        source.isBackfillSource(),
                         new ArrayBlockingQueue<>(DEFAULT_QUEUE_CAPACITY));
 
         // Builds a debezium engine but not start it
-        this.id = source.getSourceId();
+        this.id = config.getSourceId();
         this.changeEventConsumer = consumer;
         this.engine =
                 DebeziumEngine.create(Connect.class)

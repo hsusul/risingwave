@@ -17,63 +17,28 @@
 package com.risingwave.connector.source.common;
 
 import com.risingwave.connector.api.source.SourceTypeE;
-import java.util.Map;
+import com.risingwave.proto.ConnectorServiceProto.GetEventStreamRequest;
 
 public final class CdcSourceFactory {
     private CdcSourceFactory() {}
 
-    public static CdcSource createSource(
-            SourceTypeE sourceType,
-            long sourceId,
-            String startOffset,
-            Map<String, String> userProps,
-            boolean snapshotDone,
-            boolean isCdcSourceJob) {
+    public static CdcSource createSource(GetEventStreamRequest request) {
+        var sourceType = SourceTypeE.valueOf(request.getSourceType());
         switch (sourceType) {
             case MYSQL:
-                return new MysqlCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new MysqlCdcSource(request);
             case MARIADB:
-                return new MariadbCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new MariadbCdcSource(request);
             case POSTGRES:
-                return new PostgresCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new PostgresCdcSource(request);
             case MONGODB:
-                return new MongodbCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new MongodbCdcSource(request);
             case SQL_SERVER:
-                return new SqlServerCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new SqlServerCdcSource(request);
             case ORACLE:
-                return new OracleCdcSource(
-                        sourceId, startOffset, userProps, snapshotDone, isCdcSourceJob);
+                return new OracleCdcSource(request);
             default:
                 throw ValidatorUtils.invalidArgument("Unknown source type: " + sourceType);
-        }
-    }
-
-    /**
-     * Builds the Debezium configuration of {@code source}. Validation calls it only after the WITH
-     * options have been checked, because building the configuration parses them.
-     */
-    public static DbzConnectorConfig createConfig(CdcSource source) {
-        switch (source.getSourceType()) {
-            case MYSQL:
-                return new MysqlDbzConnectorConfig(source);
-            case MARIADB:
-                return new MariadbDbzConnectorConfig(source);
-            case POSTGRES:
-                return new PostgresDbzConnectorConfig(source);
-            case MONGODB:
-                return new MongodbDbzConnectorConfig(source);
-            case SQL_SERVER:
-                return new SqlServerDbzConnectorConfig(source);
-            case ORACLE:
-                return new OracleDbzConnectorConfig(source);
-            default:
-                throw ValidatorUtils.invalidArgument(
-                        "Unknown source type: " + source.getSourceType());
         }
     }
 }
