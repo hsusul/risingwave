@@ -789,7 +789,10 @@ pub fn bind_connector_props(
                 .to_owned(),
         )));
     }
-    validate_compatibility(format_encode, &mut with_properties)?;
+    let (_, secret_refs) =
+        resolve_secret_ref_in_with_options(with_properties.clone(), &handler_args.session)?
+            .into_parts();
+    validate_compatibility(format_encode, &mut with_properties, &secret_refs)?;
     let refresh_mode = {
         let refresh_mode = resolve_source_refresh_mode_in_with_option(&mut with_properties)?;
         if is_create_source && refresh_mode.is_some() {

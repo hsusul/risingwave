@@ -33,6 +33,7 @@ use itertools::Itertools;
 use risingwave_common::bail;
 use risingwave_common::id::{ActorId, SourceId};
 use risingwave_common::license::FeatureNotAvailable;
+use risingwave_common::secret::LocalSecretManager;
 use risingwave_pb::catalog::PbSource;
 use risingwave_pb::connector_service::{PbSourceType, PbTableSchema, SourceType, TableSchema};
 use risingwave_pb::plan_common::column_desc::GeneratedOrDefaultColumn;
@@ -153,11 +154,12 @@ pub trait CdcSourceDdlValidator: CdcSourceTypeTrait {
     /// first.
     fn check_and_fill_create_with_options(
         props: &mut BTreeMap<String, String>,
+        secret_refs: &BTreeMap<String, PbSecretRef>,
     ) -> ConnectorResult<()>
     where
         Self: CdcSourceRuntimeFlags,
     {
-        check_common_with_options::<Self>(props)
+        check_common_with_options::<Self>(props, secret_refs)
     }
 
     /// Checks that the license allows the CDC source.
@@ -169,12 +171,12 @@ pub trait CdcSourceDdlValidator: CdcSourceTypeTrait {
     /// CDC source can apply. An override calls [`check_common_with_options`] first.
     fn check_alter_with_options(
         props: &BTreeMap<String, String>,
-        _secret_refs: &BTreeMap<String, PbSecretRef>,
+        secret_refs: &BTreeMap<String, PbSecretRef>,
     ) -> ConnectorResult<()>
     where
         Self: CdcSourceRuntimeFlags,
     {
-        check_common_with_options::<Self>(props)
+        check_common_with_options::<Self>(props, secret_refs)
     }
 }
 
@@ -252,35 +254,57 @@ pub fn split_quoted_identifier_inner(name: &str, open: char, close: char) -> Opt
 const HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY: &str = "heartbeat.table.auto.initialize";
 
 /// Checks the `WITH (...)` options that every CDC source accepts, on both `CREATE` and `ALTER`.
-/// Options that only some connectors support are checked against the runtime flags of `T`.
+/// Options that only some connectors support are checked against the runtime flags of `T`. An
+/// option given as a `SECRET` in `secret_refs` is checked by its resolved value, which an error
+/// never shows.
 pub fn check_common_with_options<T: CdcSourceRuntimeFlags>(
     props: &BTreeMap<String, String>,
+    secret_refs: &BTreeMap<String, PbSecretRef>,
 ) -> ConnectorResult<()> {
+    let value_of = |key: &str| -> ConnectorResult<Option<String>> {
+        Ok(match secret_refs.get(key) {
+            Some(secret_ref) => Some(LocalSecretManager::global().fill_secret(*secret_ref)?),
+            None => props.get(key).cloned(),
+        })
+    };
+    let shown = |key: &str, value: String| {
+        if secret_refs.contains_key(key) {
+            "<secret>".to_owned()
+        } else {
+            value
+        }
+    };
     // RisingWave consumes schema-less JSON from Debezium and cannot reconstruct the scale of
     // binary logical decimals emitted by `precise`. `double` can lose precision, so an explicit
     // override must retain the common `string` default from `debezium.properties`.
-    if let Some(mode) = props.get("debezium.decimal.handling.mode")
+    if let Some(mode) = value_of("debezium.decimal.handling.mode")?
         && mode != "string"
     {
-        bail!("'debezium.decimal.handling.mode' must be 'string', got: '{mode}'");
+        bail!(
+            "'debezium.decimal.handling.mode' must be 'string', got: '{}'",
+            shown("debezium.decimal.handling.mode", mode)
+        );
     }
     for key in [
         CDC_WAIT_FOR_STREAMING_START_TIMEOUT,
         "debezium.max.queue.size",
     ] {
-        if let Some(value) = props.get(key)
+        if let Some(value) = value_of(key)?
             && value.parse::<u32>().is_err()
         {
-            bail!("Invalid value `{value}` for `{key}`");
+            bail!("Invalid value `{}` for `{key}`", shown(key, value));
         }
     }
     // Debezium reads the interval as a signed 32-bit integer.
-    if let Some(value) = props.get("debezium.heartbeat.interval.ms")
+    if let Some(value) = value_of("debezium.heartbeat.interval.ms")?
         && !value.parse::<i32>().is_ok_and(|interval| interval > 0)
     {
-        bail!("'debezium.heartbeat.interval.ms' must be a positive integer, got: '{value}'");
+        bail!(
+            "'debezium.heartbeat.interval.ms' must be a positive integer, got: '{}'",
+            shown("debezium.heartbeat.interval.ms", value)
+        );
     }
-    if let Some(value) = props.get(HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY)
+    if let Some(value) = value_of(HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY)?
         && value.parse::<bool>().map_err(|_| {
             anyhow!("'{HEARTBEAT_TABLE_AUTO_INITIALIZE_KEY}' must be 'true' or 'false'")
         })?

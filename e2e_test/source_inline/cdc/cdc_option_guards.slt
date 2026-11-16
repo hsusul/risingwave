@@ -61,10 +61,14 @@ create source postgres_heartbeat_auto_initialize with (
   heartbeat.table.auto.initialize = 'yes'
 ) format plain encode json;
 
-# A SECRET value is filled into the connector properties only at runtime, after these checks.
+# As a SECRET, the keys RisingWave sets and `auto.schema.change` are rejected outright. The other
+# checked options are checked by their resolved value, which the error does not show.
 
 statement ok
 create secret cdc_option_guards_secret with (backend = 'meta') as 'true';
+
+statement ok
+create secret cdc_option_guards_zero_secret with (backend = 'meta') as '0';
 
 statement error 'transactional' cannot be set
 create source mysql_transactional_secret with (
@@ -84,5 +88,20 @@ create source mysql_auto_schema_change_secret with (
   auto.schema.change = secret cdc_option_guards_secret
 ) format plain encode json;
 
+statement error 'heartbeat.table.auto.initialize=true' is not supported for connector mysql-cdc
+create source mysql_heartbeat_auto_initialize_secret with (
+  connector = 'mysql-cdc',
+  heartbeat.table.auto.initialize = secret cdc_option_guards_secret
+) format plain encode json;
+
+statement error 'debezium.heartbeat.interval.ms' must be a positive integer, got: '<secret>'
+create source postgres_heartbeat_interval_secret with (
+  connector = 'postgres-cdc',
+  debezium.heartbeat.interval.ms = secret cdc_option_guards_zero_secret
+) format plain encode json;
+
 statement ok
 drop secret cdc_option_guards_secret;
+
+statement ok
+drop secret cdc_option_guards_zero_secret;
